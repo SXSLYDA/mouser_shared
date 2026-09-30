@@ -22,6 +22,12 @@ REQUEST_TIMEOUT = 15
 
 
 def _clean_str(val: Any) -> str:
+    # None must become "", not "None": str(None) is the literal text
+    # "None", which then got used as a real value - an image URL of
+    # "None", a product link of "None", even a manufacturer Company named
+    # "None" in InvenTree for parts Mouser lists without one.
+    if val is None:
+        return ""
     try:
         return str(val).strip()
     except Exception:
