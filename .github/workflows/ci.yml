@@ -1,0 +1,81 @@
+name: CI
+
+# Every push and pull request: the package builds and every Python file compiles.
+# A release tag (vX.Y.Z, made by bump-version.ps1): the tag must match
+# mouser_lookup/version.py and have a CHANGELOG.md section, then a GitHub release is
+# published with that section as its notes. Nothing is deployed from here - the
+# InvenTree plugin installs this package by its tag (setup.py's mouser-lookup pin).
+#
+# To publish a release for a tag pushed before this workflow existed:
+#   Actions -> CI -> Run workflow -> enter the tag in "release_tag".
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Publish a GitHub release for this existing tag (e.g. v0.1.2). Leave empty for a normal run."
+        required: false
+        default: ""
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Every Python file compiles
+        run: python -m compileall -q mouser_lookup setup.py tools
+      - name: The package installs
+        run: pip install .
+      - name: Release tag matches version.py and CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
+        env:
+          TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          version=$(python -c "import re; print(re.search(r'MOUSER_LOOKUP_VERSION\s*=\s*[\"\'](.+?)[\"\']', open('mouser_lookup/version.py').read()).group(1))")
+          echo "tag ${TAG}, version.py ${version}"
+          test "${TAG}" = "v${version}" || { echo "::error::Tag ${TAG} does not match version.py (${version})"; exit 1; }
+          python tools/release_notes.py "${version}" CHANGELOG.md > /dev/null
+
+  release:
+    needs: [check]
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.release_tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Release notes from CHANGELOG.md
+        run: |
+          case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "::error::'$TAG' is not a vX.Y.Z tag"; exit 1 ;; esac
+          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { echo "::error::Tag $TAG does not exist"; exit 1; }
+          version="${TAG#v}"
+          git show "refs/tags/$TAG:CHANGELOG.md" > "$RUNNER_TEMP/CHANGELOG.md" 2>/dev/null \
+            || { echo "::error::$TAG has no CHANGELOG.md (tagged before the changelog existed)"; exit 1; }
+          python3 tools/release_notes.py "$version" "$RUNNER_TEMP/CHANGELOG.md" > notes.md
+          cat >> notes.md <<NOTES
+
+          ---
+          **Use in the InvenTree plugin:** its \`build-and-bump.ps1\` moves setup.py's pin to this tag automatically:
+          \`mouser-lookup @ git+https://github.com/${GITHUB_REPOSITORY}.git@${TAG}\`
+          NOTES
+          cat notes.md
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists - leaving it as it is."
+            exit 0
+          fi
+          gh release create "$TAG" --title "mouser_shared $TAG" --notes-file notes.md --verify-tag

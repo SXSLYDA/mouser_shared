@@ -95,3 +95,17 @@ depend on the other to get Mouser data — they're separate Django projects
 running in separate processes. A standalone pip-installable package is the
 only way both sides use the identical parsing/normalization logic without
 one importing the other's app.
+
+## Releasing
+
+1. Note what changed under `## Unreleased` in `CHANGELOG.md`.
+2. `.\bump-version.ps1` (patch) or `.\bump-version.ps1 -Version X.Y.Z` - bumps
+   `mouser_lookup/version.py`, stamps the changelog, commits and tags `vX.Y.Z`.
+3. Push the commit **and the tag** (PyCharm: tick "Push tags";
+   terminal: `git push --follow-tags`).
+
+CI (`.github/workflows/ci.yml`) checks every push compiles and installs; on a
+tag it checks the tag matches `version.py` and the changelog, then publishes a
+GitHub release with that version's notes. The InvenTree plugin's
+`build-and-bump.ps1` then moves its `setup.py` pin to the new tag on its next
+release.
